@@ -1,3 +1,4 @@
+
 // LocalVectorStore.swift
 // On-device semantic search over transactions using Core ML MiniLM embeddings
 // Enables Foundation Models to find relevant past transactions without cloud round-trips
@@ -10,13 +11,13 @@ import Foundation
 
 actor LocalVectorStore {
     private var entries: [VectorEntry] = []
-    private var embedder: MiniLMEmbedder?
+    private var embedder: MiniLMEmbeddingRunner?
     private(set) var isReady = false
 
     // MARK: - Init
 
     func initialize() throws {
-        embedder = try MiniLMEmbedder()
+        embedder = try MiniLMEmbeddingRunner()
         isReady  = true
         print("✅ LocalVectorStore ready")
     }
@@ -82,23 +83,24 @@ struct VectorMatch {
     let score: Float    // lower = more similar (cosine distance)
 }
 
-// MARK: - MiniLM Embedder (Core ML, 384-dim)
+// MARK: - MiniLM Embedding Runner
+// Named MiniLMEmbeddingRunner (not MiniLMEmbedder) to avoid clash with the
+// Swift class Xcode auto-generates from MiniLMEmbedder.mlpackage.
+// We use the auto-generated MiniLMEmbedder class directly for inference.
 
-class MiniLMEmbedder {
-    private let model:     MLModel
+class MiniLMEmbeddingRunner {
+    // Xcode auto-generates `MiniLMEmbedder` from the .mlpackage —
+    // we hold a reference to that generated class here.
+    private let model:     MiniLMEmbedder
     private let tokenizer: LightweightBertTokenizer
     private let dim       = 384
     private let maxLen    = 64
 
     init() throws {
-        guard let url = Bundle.main.url(
-            forResource: "MiniLMEmbedder", withExtension: "mlmodelc"
-        ) else {
-            throw EmbedderError.modelNotFound
-        }
         let config = MLModelConfiguration()
         config.computeUnits = .all
-        model     = try MLModel(contentsOf: url, configuration: config)
+        // MiniLMEmbedder() is the Xcode-generated initialiser from the .mlpackage
+        model     = try MiniLMEmbedder(configuration: config)
         tokenizer = LightweightBertTokenizer()
     }
 
@@ -112,26 +114,12 @@ class MiniLMEmbedder {
             attnMask[i] = NSNumber(value: tokens.attentionMask[i])
         }
 
-        let input = try MLDictionaryFeatureProvider(dictionary: [
-            "input_ids":      MLFeatureValue(multiArray: inputIds),
-            "attention_mask": MLFeatureValue(multiArray: attnMask)
-        ])
-        let output = try model.prediction(from: input)
+        // Use the auto-generated typed prediction API
+        let input  = MiniLMEmbedderInput(input_ids: inputIds, attention_mask: attnMask)
+        let output = try model.prediction(input: input)
 
-        guard let emb = output.featureValue(for: "embeddings")?.multiArrayValue else {
-            throw EmbedderError.inferenceFailure
-        }
-        var result: [Float] = Array(repeating: 0, count: dim)
-        for i in 0..<dim {
-            if emb.dataType == .float32 {
-                result[i] = emb[i].floatValue
-            } else if emb.dataType == .double {
-                result[i] = Float(truncating: emb[i])
-            } else {
-                result[i] = Float(truncating: emb[i])
-            }
-        }
-        return result
+        let emb = output.embeddings   // MLMultiArray — auto-generated output property
+        return (0..<dim).map { Float(truncating: emb[$0]) }
     }
 
     func cosineDistance(_ a: [Float], _ b: [Float]) -> Float {
@@ -144,7 +132,5 @@ class MiniLMEmbedder {
 }
 
 enum EmbedderError: Error {
-    case modelNotFound
     case inferenceFailure
 }
-
