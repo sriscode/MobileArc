@@ -1,0 +1,150 @@
+// LocalVectorStore.swift
+// On-device semantic search over transactions using Core ML MiniLM embeddings
+// Enables Foundation Models to find relevant past transactions without cloud round-trips
+// Train model: MLTraining/embeddings/convert_minilm.py
+
+import CoreML
+import Foundation
+
+// MARK: - Vector Store (Actor for thread safety)
+
+actor LocalVectorStore {
+    private var entries: [VectorEntry] = []
+    private var embedder: MiniLMEmbedder?
+    private(set) var isReady = false
+
+    // MARK: - Init
+
+    func initialize() throws {
+        embedder = try MiniLMEmbedder()
+        isReady  = true
+        print("✅ LocalVectorStore ready")
+    }
+
+    // MARK: - Index Transactions
+    // Called on every background account sync to keep the store fresh
+
+    func indexTransactions(_ transactions: [Transaction]) throws {
+        guard let embedder = embedder else { return }
+        for txn in transactions {
+            let text      = "\(txn.merchant) \(txn.category) \(txn.formattedAmount) \(txn.date)"
+            let embedding = try embedder.embed(text)
+            let entry     = VectorEntry(
+                id:        "txn:\(txn.id)",
+                vector:    embedding,
+                metadata:  [
+                    "merchant": txn.merchant,
+                    "amount":   txn.formattedAmount,
+                    "category": txn.category,
+                    "date":     txn.date
+                ]
+            )
+            entries.removeAll { $0.id == entry.id }
+            entries.append(entry)
+        }
+    }
+
+    // MARK: - Semantic Search
+
+    func search(query: String, topK: Int = 8) throws -> [VectorMatch] {
+        guard let embedder = embedder else { return [] }
+        let queryVec = try embedder.embed(query)
+        return entries
+            .map { VectorMatch(entry: $0, score: embedder.cosineDistance(queryVec, $0.vector)) }
+            .sorted { $0.score < $1.score }
+            .prefix(topK)
+            .map { $0 }
+    }
+
+    // MARK: - RAG Context Builder
+    // Call this to enrich Foundation Models prompts with relevant transactions
+
+    func buildRAGContext(for query: String) throws -> String {
+        let matches = try search(query: query, topK: 5)
+        guard !matches.isEmpty else { return "" }
+        let lines = matches.map {
+            "\($0.entry.metadata["date"] ?? "") | \($0.entry.metadata["merchant"] ?? "") | \($0.entry.metadata["amount"] ?? "") | \($0.entry.metadata["category"] ?? "")"
+        }.joined(separator: "\n")
+        return "Relevant past transactions:\n\(lines)"
+    }
+}
+
+// MARK: - Vector Entry & Match
+
+struct VectorEntry {
+    let id:       String
+    let vector:   [Float]
+    let metadata: [String: String]
+}
+
+struct VectorMatch {
+    let entry: VectorEntry
+    let score: Float    // lower = more similar (cosine distance)
+}
+
+// MARK: - MiniLM Embedder (Core ML, 384-dim)
+
+class MiniLMEmbedder {
+    private let model:     MLModel
+    private let tokenizer: LightweightBertTokenizer
+    private let dim       = 384
+    private let maxLen    = 64
+
+    init() throws {
+        guard let url = Bundle.main.url(
+            forResource: "MiniLMEmbedder", withExtension: "mlmodelc"
+        ) else {
+            throw EmbedderError.modelNotFound
+        }
+        let config = MLModelConfiguration()
+        config.computeUnits = .all
+        model     = try MLModel(contentsOf: url, configuration: config)
+        tokenizer = LightweightBertTokenizer()
+    }
+
+    func embed(_ text: String) throws -> [Float] {
+        let tokens = tokenizer.encode(text, maxLength: maxLen)
+
+        let inputIds = try MLMultiArray(shape: [1, maxLen as NSNumber], dataType: .int32)
+        let attnMask = try MLMultiArray(shape: [1, maxLen as NSNumber], dataType: .int32)
+        for i in 0..<tokens.inputIds.count {
+            inputIds[i] = NSNumber(value: tokens.inputIds[i])
+            attnMask[i] = NSNumber(value: tokens.attentionMask[i])
+        }
+
+        let input = try MLDictionaryFeatureProvider(dictionary: [
+            "input_ids":      MLFeatureValue(multiArray: inputIds),
+            "attention_mask": MLFeatureValue(multiArray: attnMask)
+        ])
+        let output = try model.prediction(from: input)
+
+        guard let emb = output.featureValue(for: "embeddings")?.multiArrayValue else {
+            throw EmbedderError.inferenceFailure
+        }
+        var result: [Float] = Array(repeating: 0, count: dim)
+        for i in 0..<dim {
+            if emb.dataType == .float32 {
+                result[i] = emb[i].floatValue
+            } else if emb.dataType == .double {
+                result[i] = Float(truncating: emb[i])
+            } else {
+                result[i] = Float(truncating: emb[i])
+            }
+        }
+        return result
+    }
+
+    func cosineDistance(_ a: [Float], _ b: [Float]) -> Float {
+        let dot   = zip(a, b).map(*).reduce(0, +)
+        let normA = sqrt(a.map { $0 * $0 }.reduce(0, +))
+        let normB = sqrt(b.map { $0 * $0 }.reduce(0, +))
+        guard normA > 0, normB > 0 else { return 1.0 }
+        return 1.0 - (dot / (normA * normB))
+    }
+}
+
+enum EmbedderError: Error {
+    case modelNotFound
+    case inferenceFailure
+}
+
