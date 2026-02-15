@@ -170,16 +170,35 @@ actor FoundationModelsService {
         if chatSession == nil { chatSession = makeChatSession() }
         guard let session = chatSession else { throw AgentError.foundationModelsUnavailable }
 
+        /*
+         TODO:
+         Layer 1 — Structural detection (on-device, regex)     ← current approach, needs expansion
+         Layer 2 — Semantic detection (on-device, ML)          ← catches context-aware PII
+         Layer 3 — Output scanning (both sides)                ← scan what the LLM says back
+         Layer 4 — Server audit (async, not blocking)          ← logs for compliance, never blocks
+         */
+        let security = AppSecurityService()
+        let safeQuery = await security.sanitizeAndAudit(query, userId: context.userId)
         // Enrich query with sanitised account context (no raw PII)
         let enrichedQuery = """
-            \(query)
+            \(safeQuery)
 
             [Account summary — \(Date.now.formatted(.relative(presentation: .numeric)))]
             \(context.toNonSensitiveSummary())
             """
 
         let response = try await session.respond(to: enrichedQuery)
-        return .text(response.content)
+        // Scan the output too — not just the input
+        let safeResponse = await security.sanitizeAndAudit(response.content, userId: context.userId)
+        
+        // Flag if sanitizer had to change anything in the output
+        if safeResponse != response.content {
+            await AuditLogger.shared.log(
+                event: "llm_output_pii_detected",
+                metadata: ["query_hash": query.hashValue.description]
+            )
+        }
+        return .text(safeResponse)
     }
 
     // MARK: - Spending Analysis — Streaming Structured Output

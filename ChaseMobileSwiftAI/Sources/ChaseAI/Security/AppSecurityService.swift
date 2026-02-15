@@ -66,23 +66,114 @@ class AppSecurityService {
     /// Strip sensitive data before any string reaches an LLM context or tool output.
     func sanitizeForLLM(_ text: String) -> String {
         var s = text
-        // 16-digit card numbers (with or without spaces/dashes)
-        s = s.replacingOccurrences(
-            of: #"\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}\b"#,
-            with: "[CARD-REDACTED]", options: .regularExpression)
-        // SSN — formatted or raw 9 digits
-        s = s.replacingOccurrences(
-            of: #"\b\d{3}-\d{2}-\d{4}\b"#,
-            with: "[SSN-REDACTED]", options: .regularExpression)
-        // CVV after keyword
-        s = s.replacingOccurrences(
-            of: #"(?i)(cvv|cvc|security code)\s*[:\s]\s*\d{3,4}"#,
-            with: "[CVV-REDACTED]", options: .regularExpression)
-        // PIN after keyword
-        s = s.replacingOccurrences(
-            of: #"(?i)pin\s*[:\s]\s*\d{4,6}"#,
-            with: "[PIN-REDACTED]", options: .regularExpression)
+        let rules: [(pattern: String, replacement: String)] = [
+
+            // ── Identity ──────────────────────────────────────────────
+            // SSN — formatted
+            (#"\b\d{3}-\d{2}-\d{4}\b"#,                              "[SSN-REDACTED]"),
+            // SSN — raw 9 digits (with word boundary context)
+            (#"(?i)(ssn|social security)[:\s#]*\d{9}"#,              "[SSN-REDACTED]"),
+            // Date of birth
+            (#"(?i)(dob|date of birth|born on)[:\s]*\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}"#, "[DOB-REDACTED]"),
+            // Passport number
+            (#"\b[A-Z]{1,2}\d{6,9}\b"#,                              "[PASSPORT-REDACTED]"),
+            // Driver's license (US general format)
+            (#"(?i)(driver.?s?\s+licen[sc]e|dl\s*#?)[:\s]*[A-Z0-9]{6,15}"#, "[DL-REDACTED]"),
+
+            // ── Payment Credentials ───────────────────────────────────
+            // Card numbers — 16 digit with optional separators
+            (#"\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}\b"#,    "[CARD-REDACTED]"),
+            // Amex — 15 digit
+            (#"\b3[47]\d{2}[\s\-]?\d{6}[\s\-]?\d{5}\b"#,            "[CARD-REDACTED]"),
+            // CVV — 3 or 4 digits after keyword
+            (#"(?i)(cvv|cvc|cvv2|security code)[:\s]*\d{3,4}"#,      "[CVV-REDACTED]"),
+            // PIN
+            (#"(?i)(pin|passcode)[:\s]*\d{4,6}"#,                    "[PIN-REDACTED]"),
+            // Expiry date on card context
+            (#"(?i)(exp|expiry|expiration)[:\s]*\d{2}[\/\-]\d{2,4}"#,"[EXPIRY-REDACTED]"),
+
+            // ── Account & Routing ─────────────────────────────────────
+            // US routing numbers — exactly 9 digits (ABA format)
+            (#"(?i)(routing|aba|rtn)[:\s#]*\d{9}"#,                  "[ROUTING-REDACTED]"),
+            // Account numbers after keyword (8-17 digits)
+            (#"(?i)(account\s*#?|acct)[:\s]*\d{8,17}"#,              "[ACCOUNT-REDACTED]"),
+            // IBAN
+            (#"\b[A-Z]{2}\d{2}[A-Z0-9]{4}\d{7,19}\b"#,              "[IBAN-REDACTED]"),
+            // SWIFT/BIC code
+            (#"\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?\b"#,     "[SWIFT-REDACTED]"),
+
+            // ── Authentication ────────────────────────────────────────
+            // OTP / 2FA codes
+            (#"(?i)(otp|one.?time|verification|auth)\s*(code|token)[:\s]*\d{4,8}"#, "[OTP-REDACTED]"),
+            // Passwords after keyword
+            (#"(?i)(password|passwd|pwd)[:\s]+\S+"#,                  "[PASSWORD-REDACTED]"),
+            // Security questions/answers
+            (#"(?i)(mother.?s maiden|first pet|childhood)[:\s]+\w+"#, "[SECURITY-ANS-REDACTED]"),
+
+            // ── Wire Transfer Details ─────────────────────────────────
+            // Wire amounts with recipient — high risk combination
+            (#"(?i)wire\s+\$?\d[\d,]*\.?\d*\s+to"#,                  "[WIRE-REDACTED]"),
+
+            // ── Contact (partial — banks vary on policy) ─────────────
+            // Full phone numbers
+            (#"\b(\+1[\s\-]?)?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{4}\b"#, "[PHONE-REDACTED]"),
+        ]
+
+        for rule in rules {
+            s = s.replacingOccurrences(
+                of: rule.pattern,
+                with: rule.replacement,
+                options: .regularExpression
+            )
+        }
         return s
+    }
+    
+    func sanitizeAndAudit(_ text: String, userId: String) async -> String {
+        let sanitized = sanitizeForLLM(text)
+
+        // Only log if something was actually redacted
+        if sanitized != text {
+            let patterns = detectRedactedPatterns(original: text, sanitized: sanitized)
+
+            // Fire-and-forget — never blocks the query
+            Task.detached(priority: .background) {
+                await AuditLogger.shared.log(
+                    event: "pii_redacted_from_input",
+                    metadata: [
+                        "user_id":      userId,
+                        "patterns":     patterns.joined(separator: ","),
+                        "query_hash":   String(text.hashValue),  // hash only, never raw text
+                        "pattern_count": String(patterns.count)
+                    ]
+                )
+            }
+        }
+        return sanitized
+    }
+
+    // Helper — identifies which pattern types fired
+    private func detectRedactedPatterns(original: String, sanitized: String) -> [String] {
+        var found: [String] = []
+
+        let checks: [(String, String)] = [
+            ("[CARD-REDACTED]",     "card_number"),
+            ("[SSN-REDACTED]",      "ssn"),
+            ("[CVV-REDACTED]",      "cvv"),
+            ("[PIN-REDACTED]",      "pin"),
+            ("[ROUTING-REDACTED]",  "routing_number"),
+            ("[ACCOUNT-REDACTED]",  "account_number"),
+            ("[OTP-REDACTED]",      "otp"),
+            ("[PASSWORD-REDACTED]", "password"),
+            ("[PHONE-REDACTED]",    "phone_number"),
+            ("[IBAN-REDACTED]",     "iban"),
+            ("[DOB-REDACTED]",      "date_of_birth"),
+        ]
+
+        for (marker, name) in checks {
+            if sanitized.contains(marker) { found.append(name) }
+        }
+        return found
     }
 
     // MARK: - Keychain
