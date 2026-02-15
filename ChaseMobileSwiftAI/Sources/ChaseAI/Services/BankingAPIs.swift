@@ -115,11 +115,11 @@ class RatesAPI {
     func fetchSavingsRates(type: String) async throws -> SavingsRates {
         try await Task.sleep(nanoseconds: 200_000_000)
         switch type {
-        case "hysa":    return SavingsRates(chase: 0.01,  bestMarket: 5.25, nationalAvg: 0.58, date: "Today")
-        case "cd_6mo":  return SavingsRates(chase: 4.25,  bestMarket: 5.40, nationalAvg: 1.82, date: "Today")
-        case "cd_1yr":  return SavingsRates(chase: 4.50,  bestMarket: 5.35, nationalAvg: 1.89, date: "Today")
-        case "cd_2yr":  return SavingsRates(chase: 4.30,  bestMarket: 5.10, nationalAvg: 1.75, date: "Today")
-        default:        return SavingsRates(chase: 0.01,  bestMarket: 5.00, nationalAvg: 0.50, date: "Today")
+        case "hysa":    return SavingsRates(chase: 0.01,  bestMarket: 5.25, nationalAvg: 0.58, date: "Today", action: "Open High Yield returns Account")
+        case "cd_6mo":  return SavingsRates(chase: 4.25,  bestMarket: 5.40, nationalAvg: 1.82, date: "Today", action: "Open CD for 6 months")
+        case "cd_1yr":  return SavingsRates(chase: 4.50,  bestMarket: 5.35, nationalAvg: 1.89, date: "Today", action: "Open CD for 1 year")
+        case "cd_2yr":  return SavingsRates(chase: 4.30,  bestMarket: 5.10, nationalAvg: 1.75, date: "Today", action: "Open CD for 2 years")
+        default:        return SavingsRates(chase: 0.01,  bestMarket: 5.00, nationalAvg: 0.50, date: "Today", action: "Save using AutoSave Feature")
         }
     }
 }

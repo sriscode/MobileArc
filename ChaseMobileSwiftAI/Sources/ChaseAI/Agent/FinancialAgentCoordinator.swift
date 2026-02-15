@@ -45,12 +45,10 @@ public final class FinancialAgentCoordinator {
         private let service = CloudAgentService()
 
         func process(query: String, intent: UserIntent, context: AccountContext) async throws -> AgentResponse {
-            print("sritest CloudAgentActor.process")
             return try await service.process(query: query, intent: intent, context: context)
         }
 
         func executeTransfer(_ draft: TransferDraft, confirmationToken: String) async throws {
-            print("sritest CloudAgentActor.executeTransfer")
             try await service.executeTransfer(draft, confirmationToken: confirmationToken)
         }
     }
@@ -60,7 +58,7 @@ public final class FinancialAgentCoordinator {
     // Always-on Core ML services (independent of LLM backend)
     let intentClassifier = IntentClassifier()
     let fraudDetector    = FraudDetector()
-    let vectorStore      = LocalVectorStore()
+//    let vectorStore      = LocalVectorStore()
 
     // Transfer approval state — observed by SwiftUI
     var pendingTransfer: TransferDraft?
@@ -78,10 +76,10 @@ public final class FinancialAgentCoordinator {
         }
 
         // Warm up Core ML vector store in background — doesn't block UI
-        let store = self.vectorStore
-        Task(priority: .background) {
-            try? await store.initialize()
-        }
+//        let store = self.vectorStore
+//        Task(priority: .background) {
+//            try? await store.initialize()
+//        }
 
         isReady = true
     }
@@ -99,8 +97,13 @@ public final class FinancialAgentCoordinator {
         let foundationService = self.foundationService
 
         // 1. Intent classification via Core ML — always fast (~5ms), routes the query
-        let intent = (try? intentClassifier.classify(query))
+        var intent = (try? intentClassifier.classify(query))
             ?? UserIntent(type: .general, confidence: 0.5)
+        
+        // If classifier isn't confident, fall back to keywords
+        if intent.confidence < 0.75 {
+            intent = classifyWithKeywords(query)
+        }
 
         // 2. Fraud check runs in parallel — scans latest transactions
         async let fraudCheck = fraudDetector.scanLatest(context.recentTransactions)
@@ -130,6 +133,24 @@ public final class FinancialAgentCoordinator {
         }
         return await fm.analyzeSpendingStream(transactions: transactions)
     }
+    
+    // MARK: - Hardcoded classification based on keywords
+    private func classifyWithKeywords(_ query: String) -> UserIntent {
+        let t = query.lowercased()
+        if t.contains("spend") || t.contains("analys") || t.contains("transaction") || t.contains("bought") {
+            return UserIntent(type: .spendingAnalysis, confidence: 0.85)
+        }
+        if t.contains("transfer") || t.contains("send") || t.contains("move") {
+            return UserIntent(type: .transferRequest, confidence: 0.85)
+        }
+        if t.contains("invest") || t.contains("portfolio") || t.contains("stock") {
+            return UserIntent(type: .investmentQuery, confidence: 0.85)
+        }
+        if t.contains("balance") || t.contains("how much") {
+            return UserIntent(type: .balanceQuery, confidence: 0.85)
+        }
+        return UserIntent(type: .general, confidence: 0.5)
+    }
 
     // Generate proactive insights for Home screen
     func generateInsights(context: AccountContext) async throws -> [FinancialInsight] {
@@ -157,12 +178,15 @@ public final class FinancialAgentCoordinator {
 
     // MARK: - Chat Session Management
 
-//    func resetChatSession() {
-//        foundationService?.resetChatHistory()
-//    }
     func resetChatSession() {
         Task { [foundationService] in
             await foundationService?.resetChatHistory()
+        }
+    }
+    
+    func resetAnalysisSession() {
+        Task { [foundationService] in
+            await foundationService?.resetAnalysisHistory()
         }
     }
 

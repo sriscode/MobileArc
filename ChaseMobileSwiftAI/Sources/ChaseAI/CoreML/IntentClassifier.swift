@@ -33,24 +33,27 @@ struct UserIntent {
 // MARK: - Classifier
 
 class IntentClassifier {
-    private var model: MLModel?
+    private var model: ChaseIntentClassifier?   // Xcode-generated typed class from .mlpackage
     private let tokenizer = LightweightBertTokenizer()
     private let maxLength = 64
 
     init() { loadModel() }
 
     private func loadModel() {
-        guard let url = Bundle.main.url(
-            forResource: "ChaseIntentClassifier", withExtension: "mlmodelc"
-        ) else {
-            print("⚠️ ChaseIntentClassifier.mlmodelc not found — using keyword fallback")
-            print("   Run MLTraining/intent_classifier/train_intent_classifier.py to generate it")
-            return
-        }
         let config = MLModelConfiguration()
-        config.computeUnits = .all          // Use ANE when available
-        model = try? MLModel(contentsOf: url, configuration: config)
-        print("✅ Intent classifier loaded")
+        config.computeUnits = .all
+
+        // ChaseIntentClassifier() is the Xcode-generated initialiser.
+        // It's available once ChaseIntentClassifier.mlpackage is added to the Xcode target.
+        // If the model hasn't been trained yet, this will fail and we fall back to keywords.
+        do {
+            model = try ChaseIntentClassifier(configuration: config)
+            print("✅ Intent classifier loaded")
+        } catch {
+            print("⚠️ ChaseIntentClassifier failed to load: \(error.localizedDescription)")
+            print("   Run MLTraining/intent_classifier/train_intent_classifier.py to generate it")
+            model = nil
+        }
     }
 
     func classify(_ text: String) throws -> UserIntent {
@@ -60,9 +63,9 @@ class IntentClassifier {
         return classifyWithKeywords(text)
     }
 
-    // MARK: - Core ML path
+    // MARK: - Core ML path (uses Xcode-generated typed API — no string feature name lookup)
 
-    private func classifyWithCoreML(_ text: String, model: MLModel) throws -> UserIntent {
+    private func classifyWithCoreML(_ text: String, model: ChaseIntentClassifier) throws -> UserIntent {
         let tokens = tokenizer.encode(text, maxLength: maxLength)
 
         let inputIds  = try MLMultiArray(shape: [1, maxLength as NSNumber], dataType: .int32)
@@ -72,40 +75,26 @@ class IntentClassifier {
             attnMask[i] = NSNumber(value: tokens.attentionMask[i])
         }
 
-        let input = try MLDictionaryFeatureProvider(dictionary: [
-            "input_ids":      MLFeatureValue(multiArray: inputIds),
-            "attention_mask": MLFeatureValue(multiArray: attnMask)
-        ])
-        let output = try model.prediction(from: input)
+        // Xcode-generated typed input struct — no string keys, no feature name guessing
+        let input  = ChaseIntentClassifierInput(input_ids: inputIds, attention_mask: attnMask)
+        let output = try model.prediction(input: input)
 
-        guard let logits = output.featureValue(for: "logits")?.multiArrayValue else {
-            return classifyWithKeywords(text)
-        }
-
+        // output.logits is the auto-generated typed property matching the "logits" output name
+        let logits = output.logits
         let probs  = softmax(logits: logits, count: IntentType.allCases.count)
         let maxIdx = probs.indices.max(by: { probs[$0] < probs[$1] }) ?? 0
         let intent = IntentType.allCases[safe: maxIdx] ?? .general
+
+        print("🎯 Intent: \(intent.rawValue) (confidence: \(String(format: "%.0f", probs[maxIdx] * 100))%)")
         return UserIntent(type: intent, confidence: probs[maxIdx])
     }
 
     private func softmax(logits: MLMultiArray, count: Int) -> [Float] {
-        var values: [Float] = []
-        values.reserveCapacity(count)
-        for i in 0..<count {
-            let v: Float
-            if logits.dataType == .float32 {
-                v = logits[i].floatValue
-            } else if logits.dataType == .double {
-                v = Float(truncating: logits[i])
-            } else {
-                v = Float(truncating: logits[i])
-            }
-            values.append(v)
-        }
-        let maxVal = values.max() ?? 0
-        let exps = values.map { exp($0 - maxVal) }
-        let sum = exps.reduce(0, +)
-        return exps.map { $0 / (sum == 0 ? 1 : sum) }
+        var v = (0..<count).map { Float(truncating: logits[$0]) }
+        let m = v.max() ?? 0
+        v = v.map { exp($0 - m) }
+        let s = v.reduce(0, +)
+        return v.map { $0 / s }
     }
 
     // MARK: - Keyword fallback (used during development before model is trained)
@@ -156,7 +145,8 @@ class LightweightBertTokenizer {
 
     private func loadVocab() {
         guard let path = Bundle.main.path(forResource: "bert_vocab", ofType: "txt"),
-              let text = try? String(contentsOfFile: path) else { return }
+              let text = try? String(contentsOfFile: path) else {
+            return }
         text.components(separatedBy: .newlines).enumerated().forEach { i, word in
             vocab[word] = Int32(i)
         }

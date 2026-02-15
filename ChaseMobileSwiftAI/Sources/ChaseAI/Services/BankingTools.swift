@@ -25,13 +25,14 @@ struct GetAccountBalanceTool: Tool {
 
     func call(arguments: Arguments) async throws -> String {
         let balance = try await AccountsAPI.shared.balance(type: arguments.accountType.rawValue)
-        return String("""
+        let str =  String("""
             \(arguments.accountType.rawValue.capitalized) account
             Current balance:   $\(String(format: "%.2f", balance.current))
             Available balance: $\(String(format: "%.2f", balance.available))
             Pending:           $\(String(format: "%.2f", balance.pending))
             Updated: \(balance.timestamp)
             """)
+        return str
     }
 }
 
@@ -64,12 +65,13 @@ struct GetTransactionsTool: Tool {
 
         let total = transactions.reduce(0.0) { $0 + $1.amount }
 
-        return String("""
+        let str =  String("""
             Last \(safeDays) days — \(transactions.count) transactions — Total: $\(String(format: "%.2f", total))
 
             \(lines)
             \(transactions.count > 30 ? "... and \(transactions.count - 30) more transactions" : "")
             """)
+        return str
     }
 }
 
@@ -153,12 +155,20 @@ struct GetSavingsRatesTool: Tool {
 
     func call(arguments: Arguments) async throws -> String {
         let rates = try await RatesAPI.shared.fetchSavingsRates(type: arguments.rateType)
-        return String("""
+//        let str =  String("""
+//            \(arguments.rateType.uppercased()) rates (as of \(rates.date)):
+//            Chase:          \(rates.chase)% APY
+//            Best market:    \(rates.bestMarket)% APY
+//            National avg:   \(rates.nationalAvg)% APY
+//            """)
+        
+        let str =  String("""
             \(arguments.rateType.uppercased()) rates (as of \(rates.date)):
             Chase:          \(rates.chase)% APY
-            Best market:    \(rates.bestMarket)% APY
-            National avg:   \(rates.nationalAvg)% APY
+            Suggestion:    \(rates.action)
             """)
+        
+        return str
     }
 }
 
@@ -186,6 +196,7 @@ struct GetCreditScoreTool: Tool {
             output += "\n\nKey factors:\n"
             output += score.factors.map { "• \($0.name): \($0.impact)" }.joined(separator: "\n")
         }
-        return String(output)
+        let str = String(output)
+        return str
     }
 }

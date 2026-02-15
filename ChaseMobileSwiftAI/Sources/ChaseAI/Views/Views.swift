@@ -4,16 +4,15 @@
 //              Launch, Biometric Auth, Apple Intelligence Required
 
 import SwiftUI
-import UIKit
 
 // ═══════════════════════════════════════════════════════════════
 // MARK: - Main Tab View
 // ═══════════════════════════════════════════════════════════════
 
-public struct MainTabView: View {
+struct MainTabView: View {
     @Environment(FinancialAgentCoordinator.self) var coordinator
 
-    public var body: some View {
+    var body: some View {
         @Bindable var coord = coordinator
 
         TabView {
@@ -109,10 +108,29 @@ struct HomeView: View {
     }
 
     private func loadData() async {
+        coordinator.resetAnalysisSession()
+        // Step 1 — fetch real account data from banking API
         accounts = (try? await AccountsAPI.shared.fetchAccounts()) ?? []
+
+        // Step 2 — fetch recent transactions (last 30 days)
+        let transactions = (try? await TransactionsAPI.shared.fetch(days: 30, category: nil)) ?? []
+
+        // Step 3 — fetch credit score
+        let credit = try? await CreditJourneyAPI.shared.fetchScore()
+
+        // Step 4 — build a rich AccountContext with real data
+        // toNonSensitiveSummary() strips all PII before it reaches Foundation Models
+        let context = AccountContext(
+            userId:             "user_current",
+            accounts:           accounts,
+            recentTransactions: transactions,
+            creditScore:        credit?.score
+        )
+
+        // Step 5 — generate insights from real data
         isLoadingInsights = true
         do {
-            insights = try await coordinator.generateInsights(context: .current())
+            insights = try await coordinator.generateInsights(context: context)
         } catch {
             loadError = "Insights unavailable: \(error.localizedDescription)"
         }
@@ -613,7 +631,6 @@ struct SpendingView: View {
             // await MainActor.run { self.errorMessage = error.localizedDescription }
         }
     }
-
 }
 
 // MARK: - Spending Report View
@@ -689,17 +706,17 @@ struct SpendingReportView: View {
 
     var budgetLabel: String {
         switch report.budgetStatus {
-        case .some(.onTrack):    return "On Track ✓"
-        case .some(.overBudget): return "Over Budget ↑"
-        case .some(.underBudget): return "Under Budget ↓"
+        case .onTrack:    return "On Track ✓"
+        case .overBudget: return "Over Budget ↑"
+        case .underBudget: return "Under Budget ↓"
         case .none:              return "—"
         }
     }
     var budgetColor: Color {
         switch report.budgetStatus {
-        case .some(.onTrack):    return .green
-        case .some(.overBudget): return .red
-        case .some(.underBudget): return .blue
+        case .onTrack:    return .green
+        case .overBudget: return .red
+        case .underBudget: return .blue
         case .none:              return .secondary
         }
     }
@@ -1083,4 +1100,3 @@ struct RoundedCorner: Shape {
 extension FraudSignal {
     var formattedAmount: String { String(format: "$%.2f", amount) }
 }
-

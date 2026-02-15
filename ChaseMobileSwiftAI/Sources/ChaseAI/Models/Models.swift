@@ -160,6 +160,7 @@ struct SavingsRates {
     let bestMarket:  Double
     let nationalAvg: Double
     let date:        String
+    let action:      String
 }
 
 struct CreditScore {

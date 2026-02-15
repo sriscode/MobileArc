@@ -19,7 +19,7 @@ struct SpendingReport {
     @Guide(description: "Percentage change vs prior period — positive = more spending, e.g. +12.5 or -8.3")
     var changePercent: Double
 
-    @Guide(description: "Top 3 merchants by total spend"/*, count: 3*/)
+    @Guide(description: "Top 3 merchants by total spend")
     var topMerchants: [MerchantSpend]
 
     @Guide(description: "One concise recommendation for the user — actionable and specific")
@@ -88,9 +88,6 @@ struct SavingsRecommendation {
     var rationale: String
 }
 
-// MARK: - Foundation Models Service
-
-// MARK: - Foundation Models Service
 
 // InsightList must be at module scope (not inside a function) because
 // @Generable macro expansion requires a named nominal type, not a local type.
@@ -99,6 +96,9 @@ private struct InsightList {
     @Guide(description: "Exactly 3 personalised financial insights for this user"/*, count: 3*/)
     var insights: [FinancialInsight]
 }
+
+
+// MARK: - Foundation Models Service
 
 @available(iOS 26, *)
 actor FoundationModelsService {
@@ -119,7 +119,8 @@ actor FoundationModelsService {
     // MARK: - Setup
 
     func prewarm() async {
-//          SystemLanguageModel.default.prewarm()
+        // Creating sessions early warms up Foundation Models before the first user query.
+        // SystemLanguageModel has no explicit prewarm() method — session creation is sufficient.
         chatSession     = makeChatSession()
         analysisSession = makeAnalysisSession()
     }
@@ -186,30 +187,27 @@ actor FoundationModelsService {
     func analyzeSpendingStream(
         transactions: [Transaction]
     ) -> AsyncThrowingStream<SpendingReport.PartiallyGenerated, Error> {
-        // Prepare session and prompt while still on the actor, before entering the
-        // @Sendable AsyncThrowingStream closure. In Swift 6, Task{} inside a @Sendable
-        // closure does NOT inherit actor isolation, so actor-isolated properties like
-        // `analysisSession` cannot be accessed inside that Task. Resolving everything
-        // here and capturing only the resulting Sendable values avoids the error.
-        if analysisSession == nil { analysisSession = makeAnalysisSession() }
-        guard let session = analysisSession else {
-            return AsyncThrowingStream { $0.finish(throwing: AgentError.foundationModelsUnavailable) }
-        }
-
-        // Cap at 50 transactions to stay within context window
-        let txnText = transactions.prefix(50).map {
-            "\($0.date) | \($0.merchant) | \($0.formattedAmount) | \($0.category)"
-        }.joined(separator: "\n")
-
-        let prompt = """
-            Analyze these \(transactions.count) transactions:
-            \(txnText)
-            Period: \(transactions.last?.date ?? "unknown") to \(transactions.first?.date ?? "today")
-            """
-
-        // Only `session` and `prompt` are captured — no `self` access inside the closure.
-        return AsyncThrowingStream { continuation in
+        AsyncThrowingStream { continuation in
             Task {
+                if self.analysisSession == nil {
+                    self.analysisSession = self.makeAnalysisSession()
+                }
+                guard let session = self.analysisSession else {
+                    continuation.finish(throwing: AgentError.foundationModelsUnavailable)
+                    return
+                }
+
+                // Cap at 50 transactions to stay within context window
+                let txnText = transactions.prefix(50).map {
+                    "\($0.date) | \($0.merchant) | \($0.formattedAmount) | \($0.category)"
+                }.joined(separator: "\n")
+
+                let prompt = """
+                    Analyze these \(transactions.count) transactions:
+                    \(txnText)
+                    Period: \(transactions.last?.date ?? "unknown") to \(transactions.first?.date ?? "today")
+                    """
+
                 do {
                     // Snapshot streaming — each iteration is a valid partial SpendingReport
                     // Use this to animate numbers counting up in the UI
@@ -233,8 +231,47 @@ actor FoundationModelsService {
         if analysisSession == nil { analysisSession = makeAnalysisSession() }
         guard let session = analysisSession else { throw AgentError.foundationModelsUnavailable }
 
+        // Build a rich prompt with real account balances and transaction detail
+        // toNonSensitiveSummary() strips card numbers, account numbers, SSNs — safe to pass to LLM
+        let accountSummary = context.toNonSensitiveSummary()
+
+        // Include top 20 transactions so Foundation Models can spot real patterns
+        let txnLines = context.recentTransactions.prefix(20).map {
+            "\($0.date) | \($0.merchant) | \($0.formattedAmount) | \($0.category)"
+        }.joined(separator: "\n")
+
+        // Total spending by category so the model can reference real numbers
+        var categoryTotals: [String: Double] = [:]
+        for txn in context.recentTransactions {
+            categoryTotals[txn.category, default: 0] += txn.amount
+        }
+        let categoryBreakdown = categoryTotals
+            .sorted { $0.value > $1.value }
+            .map { "  \($0.key): $\(String(format: "%.2f", $0.value))" }
+            .joined(separator: "\n")
+
+        let prompt = """
+            Generate 3 specific, actionable financial insights based on this user's REAL account data.
+            Reference actual dollar amounts from the data — do not use placeholder numbers.
+
+            ACCOUNT SUMMARY:
+            \(accountSummary)
+
+            SPENDING BY CATEGORY (last 30 days):
+            \(categoryBreakdown.isEmpty ? "No transactions available" : categoryBreakdown)
+
+            RECENT TRANSACTIONS:
+            \(txnLines.isEmpty ? "No transactions available" : txnLines)
+
+            Rules:
+            - Every insight must reference a specific dollar amount from the data above
+            - Do not invent balances or transaction amounts not present in the data
+            - Insights should be actionable today, not generic advice
+            - dollarImpact should be a realistic estimate based on the actual numbers
+            """
+
         let result = try await session.respond(
-            to: "Generate insights based on this financial summary:\n\(context.toNonSensitiveSummary())",
+            to: prompt,
             generating: InsightList.self
         )
         return result.content.insights
@@ -249,14 +286,6 @@ actor FoundationModelsService {
         if analysisSession == nil { analysisSession = makeAnalysisSession() }
         guard let session = analysisSession else { throw AgentError.foundationModelsUnavailable }
 
-//  sritest      return try await session.respond(
-//            to: """
-//                User has $\(String(format: "%.2f", currentBalance)) in savings earning \(currentAPY)% APY.
-//                Recommend the best savings strategy available right now.
-//                """,
-//            generating: SavingsRecommendation.self
-//        )
-        
         let result =  try await session.respond(
             to: """
                 User has $\(String(format: "%.2f", currentBalance)) in savings earning \(currentAPY)% APY.
@@ -264,7 +293,7 @@ actor FoundationModelsService {
                 """,
             generating: SavingsRecommendation.self
         )
-        return result.content        
+        return result.content
     }
 
     // MARK: - Session Management
@@ -272,5 +301,9 @@ actor FoundationModelsService {
     func resetChatHistory() {
         chatSession = makeChatSession()
     }
+    
+    func resetAnalysisHistory() {
+        analysisSession = makeAnalysisSession()
+    }
+    
 }
-
