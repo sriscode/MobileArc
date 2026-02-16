@@ -48,6 +48,7 @@ class IntentClassifier {
         // It's available once ChaseIntentClassifier.mlpackage is added to the Xcode target.
         // If the model hasn't been trained yet, this will fail and we fall back to keywords.
         do {
+            //            Logistic Regression model
             lrmodel = try IntentClassifierLR()
         } catch {
             print("⚠️ IntentClassifierLR failed to load: \(error.localizedDescription)")

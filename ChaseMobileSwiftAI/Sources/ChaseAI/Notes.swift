@@ -5,6 +5,17 @@
 //  Created by shaurya on 2/16/26.
 //
 
+
+/*
+ident classifier
+ 
+ 
+ 
+ DistilBERT vs TF-IDF + Logistic RegressionTF-IDF + Logistic RegressionDistilBERTCategoryClassical MLDeep Learning / Neural Network AIArchitectureLinear model (1 layer)Transformer (66 million parameters, 6 layers)Training approachTrained on your 157 examples onlyPre-trained on billions of words, then fine-tunedWhat it learnsWord weights for your 8 classesLanguage understanding + your 8 classesModel typeDiscriminative (direct classification)Representation learning (understands semantics)Size300 KB133 MB (or 8 MB quantized)Feels like "AI"?❌ Feels like statistics✅ Feels like language understanding
+ 
+ 
+ */
+
 /*
  Fix 3 — Proactive Session Summarisation (Main Fix)
  When the session is getting long, summarise it before it overflows, then start fresh with the summary:
