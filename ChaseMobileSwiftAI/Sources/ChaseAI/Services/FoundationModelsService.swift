@@ -106,29 +106,8 @@ actor FoundationModelsService {
     // Separate sessions to keep conversation contexts isolated
     private var chatSession:     LanguageModelSession?
     private var analysisSession: LanguageModelSession?
-
-    // All tools the chat session can call
-    private let bankingTools: [any Tool] = [
-        GetAccountBalanceTool(),
-        GetTransactionsTool(),
-        StageTransferTool(),
-        GetSavingsRatesTool(),
-        GetCreditScoreTool()
-    ]
-
-    // MARK: - Setup
-
-    func prewarm() async {
-        // Creating sessions early warms up Foundation Models before the first user query.
-        // SystemLanguageModel has no explicit prewarm() method — session creation is sufficient.
-        chatSession     = makeChatSession()
-        analysisSession = makeAnalysisSession()
-    }
-
-    private func makeChatSession() -> LanguageModelSession {
-        LanguageModelSession(
-            tools: bankingTools,
-            instructions: Instructions("""
+    
+    private var chatInstructions = """
                 You are Chase AI, a personal financial advisor built into the Chase mobile app.
                 You have real-time access to the user's accounts, transactions, and financial data via tools.
                 
@@ -152,8 +131,30 @@ actor FoundationModelsService {
 
                 Capabilities: balances, spending analysis, transfer staging, savings rates,
                 credit score, bill payment staging, fraud dispute guidance.
-                """)
-            
+                """
+
+    // All tools the chat session can call
+    private let bankingTools: [any Tool] = [
+        GetAccountBalanceTool(),
+        GetTransactionsTool(),
+        StageTransferTool(),
+        GetSavingsRatesTool(),
+        GetCreditScoreTool()
+    ]
+
+    // MARK: - Setup
+
+    func prewarm() async {
+        // Creating sessions early warms up Foundation Models before the first user query.
+        // SystemLanguageModel has no explicit prewarm() method — session creation is sufficient.
+        chatSession     = makeChatSession()
+        analysisSession = makeAnalysisSession()
+    }
+
+    private func makeChatSession() -> LanguageModelSession {
+        LanguageModelSession(
+            tools: bankingTools,
+            instructions: Instructions(chatInstructions)
             
             /*
              DO NOT call any tool for:
@@ -182,49 +183,130 @@ actor FoundationModelsService {
                 """)
         )
     }
+    
+    func newContextualSession(with originalSession: LanguageModelSession) -> LanguageModelSession {
+        let allEntries = originalSession.transcript
+        //TODO- Keep most recent 3 turns — these establish current context
+        //use: let condensedEntries = allEntries.suffix(3)
+        let condensedEntries = [allEntries.first, allEntries.last].compactMap { $0 }
+        let condensedTranscript = Transcript(entries: condensedEntries)
+        let newSession = LanguageModelSession(tools: bankingTools, transcript: condensedTranscript)
+        return newSession
+    }
 
     // MARK: - Conversational Response (with tool calling)
 
+//    func respond(
+//        query: String,
+//        intent: UserIntent,
+//        context: AccountContext
+//    ) async throws -> AgentResponse {
+//        // Lazily create session if needed
+//        if chatSession == nil { chatSession = makeChatSession() }
+//        guard let session = chatSession else { throw AgentError.foundationModelsUnavailable }
+//
+//        /*
+//         TODO:
+//         Layer 1 — Structural detection (on-device, regex)     ← current approach, needs expansion
+//         Layer 2 — Semantic detection (on-device, ML)          ← catches context-aware PII
+//         Layer 3 — Output scanning (both sides)                ← scan what the LLM says back
+//         Layer 4 — Server audit (async, not blocking)          ← logs for compliance, never blocks
+//         */
+//        let security = AppSecurityService()
+//        let safeQuery = await security.sanitizeAndAudit(query, userId: context.userId)
+//        // Enrich query with sanitised account context (no raw PII)
+//        let enrichedQuery = """
+//            \(safeQuery)
+//
+//            [Account summary — \(Date.now.formatted(.relative(presentation: .numeric)))]
+//            \(context.toNonSensitiveSummary())
+//            """
+//        
+//        let response = try await session.respond(to: enrichedQuery)
+//        // Scan the output too — not just the input
+//        let safeResponse = await security.sanitizeAndAudit(response.content, userId: context.userId)
+//        
+//        // Flag if sanitizer had to change anything in the output
+//        if safeResponse != response.content {
+//            await AuditLogger.shared.log(
+//                event: "llm_output_pii_detected",
+//                metadata: ["query_hash": query.hashValue.description]
+//            )
+//        }
+//        return .text(safeResponse)
+//    }
+    
     func respond(
         query: String,
         intent: UserIntent,
         context: AccountContext
     ) async throws -> AgentResponse {
+
         // Lazily create session if needed
         if chatSession == nil { chatSession = makeChatSession() }
-        guard let session = chatSession else { throw AgentError.foundationModelsUnavailable }
+        guard var session = chatSession else { throw AgentError.foundationModelsUnavailable }
 
-        /*
-         TODO:
-         Layer 1 — Structural detection (on-device, regex)     ← current approach, needs expansion
-         Layer 2 — Semantic detection (on-device, ML)          ← catches context-aware PII
-         Layer 3 — Output scanning (both sides)                ← scan what the LLM says back
-         Layer 4 — Server audit (async, not blocking)          ← logs for compliance, never blocks
-         */
         let security = AppSecurityService()
         let safeQuery = await security.sanitizeAndAudit(query, userId: context.userId)
-        // Enrich query with sanitised account context (no raw PII)
+
         let enrichedQuery = """
-            \(safeQuery)
+        \(safeQuery)
 
-            [Account summary — \(Date.now.formatted(.relative(presentation: .numeric)))]
-            \(context.toNonSensitiveSummary())
-            """
+        [Account summary — \(Date.now.formatted(.relative(presentation: .numeric)))]
+        \(context.toNonSensitiveSummary())
+        """
 
-        let response = try await session.respond(to: enrichedQuery)
-        // Scan the output too — not just the input
-        let safeResponse = await security.sanitizeAndAudit(response.content, userId: context.userId)
-        
-        // Flag if sanitizer had to change anything in the output
-        if safeResponse != response.content {
-            await AuditLogger.shared.log(
-                event: "llm_output_pii_detected",
-                metadata: ["query_hash": query.hashValue.description]
-            )
+        // A small helper so we don't duplicate output scanning logic
+        func respondAndSanitize(using s: LanguageModelSession) async throws -> AgentResponse {
+            let response = try await s.respond(to: enrichedQuery,
+                                               options: GenerationOptions(sampling: .greedy))
+
+            // Scan the output too — not just the input
+            let safeResponse = await security.sanitizeAndAudit(response.content, userId: context.userId)
+
+            // Flag if sanitizer had to change anything in the output
+            if safeResponse != response.content {
+                await AuditLogger.shared.log(
+                    event: "llm_output_pii_detected",
+                    metadata: ["query_hash": query.hashValue.description]
+                )
+            }
+            return .text(safeResponse)
         }
-        return .text(safeResponse)
+
+        do {
+            // First attempt with current session
+            return try await respondAndSanitize(using: session)
+
+        } catch LanguageModelSession.GenerationError.exceededContextWindowSize(let contextWindow) {
+            // Log + rebuild session with condensed transcript
+            print("exceededContextWindowSize error ")
+            let newSession = newContextualSession(with: session)
+            chatSession = newSession     // persist the new session
+            session = newSession         // use for retry immediately
+
+            // Retry once
+            return try await respondAndSanitize(using: session)
+
+        } catch let genError as LanguageModelSession.GenerationError {
+            // Other generation errors (content filtering, etc.)
+
+            throw genError
+
+        } catch {
+            // Non-generation errors
+            await AuditLogger.shared.log(
+                event: "llm_unexpected_error",
+                metadata: [
+                    "query_hash": query.hashValue.description,
+                    "error": String(describing: error)
+                ]
+            )
+            throw error
+        }
     }
 
+    
     // MARK: - Spending Analysis — Streaming Structured Output
 
     func analyzeSpendingStream(
@@ -256,7 +338,8 @@ actor FoundationModelsService {
                     // Use this to animate numbers counting up in the UI
                     for try await snapshot in session.streamResponse(
                         to: prompt,
-                        generating: SpendingReport.self
+                        generating: SpendingReport.self,
+                        options: GenerationOptions(sampling: .greedy)
                     ) {
                         continuation.yield(snapshot.content)
                     }
@@ -334,7 +417,8 @@ actor FoundationModelsService {
                 User has $\(String(format: "%.2f", currentBalance)) in savings earning \(currentAPY)% APY.
                 Recommend the best savings strategy available right now.
                 """,
-            generating: SavingsRecommendation.self
+            generating: SavingsRecommendation.self,
+            options: GenerationOptions(sampling: .greedy)
         )
         return result.content
     }
