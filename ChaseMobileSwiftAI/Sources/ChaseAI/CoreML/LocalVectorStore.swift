@@ -8,7 +8,7 @@ import CoreML
 import Foundation
 
 // MARK: - Vector Store (Actor for thread safety)
-
+//LocalVectorStore for persistant vector db.
 actor LocalVectorStore {
     private var entries: [VectorEntry] = []
     private var embedder: MiniLMEmbeddingRunner?

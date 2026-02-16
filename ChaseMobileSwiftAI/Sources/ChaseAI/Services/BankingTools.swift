@@ -24,6 +24,13 @@ struct GetAccountBalanceTool: Tool {
     }
 
     func call(arguments: Arguments) async throws -> String {
+        let cacheKey = "getAccountBalance:\(arguments.accountType)"
+
+        // Check cache first
+        if let cached = await ToolResponseCache.shared.get(cacheKey) {
+            return cached    // ← returns immediately, no API call
+        }
+        
         let balance = try await AccountsAPI.shared.balance(type: arguments.accountType.rawValue)
         let str =  String("""
             \(arguments.accountType.rawValue.capitalized) account
@@ -32,6 +39,13 @@ struct GetAccountBalanceTool: Tool {
             Pending:           $\(String(format: "%.2f", balance.pending))
             Updated: \(balance.timestamp)
             """)
+        
+        await ToolResponseCache.shared.set(
+            cacheKey,
+            value: str,
+            ttl: ToolResponseCache.TTL.accountBalance   // 24 hours
+        )
+        
         return str
     }
 }
@@ -52,6 +66,12 @@ struct GetTransactionsTool: Tool {
     }
 
     func call(arguments: Arguments) async throws -> String {
+        let cacheKey = "getTransactions: all)"
+
+        if let cached = await ToolResponseCache.shared.get(cacheKey) {
+            return cached
+        }
+        
         let safeDays = min(max(arguments.daysPast, 1), 90)
         let transactions = try await TransactionsAPI.shared.fetch(
             days: safeDays,
@@ -71,6 +91,13 @@ struct GetTransactionsTool: Tool {
             \(lines)
             \(transactions.count > 30 ? "... and \(transactions.count - 30) more transactions" : "")
             """)
+        
+        await ToolResponseCache.shared.set(
+            cacheKey,
+            value: str,
+            ttl: ToolResponseCache.TTL.transactions   // 24 hours
+        )
+        
         return str
     }
 }
@@ -154,6 +181,12 @@ struct GetSavingsRatesTool: Tool {
     }
 
     func call(arguments: Arguments) async throws -> String {
+        let cacheKey = "getSavingsRates"
+
+        if let cached = await ToolResponseCache.shared.get(cacheKey) {
+            return cached
+        }
+        
         let rates = try await RatesAPI.shared.fetchSavingsRates(type: arguments.rateType)
 //        let str =  String("""
 //            \(arguments.rateType.uppercased()) rates (as of \(rates.date)):
@@ -167,6 +200,12 @@ struct GetSavingsRatesTool: Tool {
             Chase:          \(rates.chase)% APY
             Suggestion:    \(rates.action)
             """)
+        
+        await ToolResponseCache.shared.set(
+            cacheKey,
+            value: str,
+            ttl: ToolResponseCache.TTL.savingsRates   // 24 hours
+        )
         
         return str
     }
@@ -185,6 +224,11 @@ struct GetCreditScoreTool: Tool {
     }
 
     func call(arguments: Arguments) async throws -> String {
+        let cacheKey = "getCreditScore"
+
+        if let cached = await ToolResponseCache.shared.get(cacheKey) {
+            return cached
+        }
         let score = try await CreditJourneyAPI.shared.fetchScore()
         var output = """
             Credit score: \(score.score) (\(score.rating))
@@ -197,6 +241,13 @@ struct GetCreditScoreTool: Tool {
             output += score.factors.map { "• \($0.name): \($0.impact)" }.joined(separator: "\n")
         }
         let str = String(output)
+        
+        await ToolResponseCache.shared.set(
+            cacheKey,
+            value: str,
+            ttl: ToolResponseCache.TTL.creditScore   // 24 hours
+        )
+        
         return str
     }
 }

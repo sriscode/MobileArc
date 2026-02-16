@@ -179,6 +179,7 @@ public final class FinancialAgentCoordinator {
     // MARK: - Chat Session Management
 
     func resetChatSession() {
+        resetCache()
         Task { [foundationService] in
             await foundationService?.resetChatHistory()
         }
@@ -188,6 +189,10 @@ public final class FinancialAgentCoordinator {
         Task { [foundationService] in
             await foundationService?.resetAnalysisHistory()
         }
+    }
+    
+    func resetCache() {
+        Task { await ToolResponseCache.shared.invalidateAll() }
     }
 
     // MARK: - Backend Resolution
