@@ -34,6 +34,7 @@ struct UserIntent {
 
 class IntentClassifier {
     private var model: ChaseIntentClassifier?   // Xcode-generated typed class from .mlpackage
+    private var lrmodel: IntentClassifierLR?
     private let tokenizer = LightweightBertTokenizer()
     private let maxLength = 64
 
@@ -47,6 +48,13 @@ class IntentClassifier {
         // It's available once ChaseIntentClassifier.mlpackage is added to the Xcode target.
         // If the model hasn't been trained yet, this will fail and we fall back to keywords.
         do {
+            lrmodel = try IntentClassifierLR()
+        } catch {
+            print("⚠️ IntentClassifierLR failed to load: \(error.localizedDescription)")
+            lrmodel = nil
+        }
+        
+        do {
             model = try ChaseIntentClassifier(configuration: config)
             print("✅ Intent classifier loaded")
         } catch {
@@ -58,9 +66,21 @@ class IntentClassifier {
 
     func classify(_ text: String) throws -> UserIntent {
         if let model = model {
-            return try classifyWithCoreML(text, model: model)
+            // return here if you want to use coreml
+            _ = try classifyWithCoreML(text, model: model)
+        }
+        
+        if let lrmodel = lrmodel {
+            let (output, conf, top) = lrmodel.predict(text)
+            guard let intent = IntentType(rawValue: output) else {
+                print("🎯 lrmodel Intent: fail")
+                return UserIntent(type: .general, confidence: 0.8)
+            }
+            print("🎯 lrmodel Intent: \(intent.rawValue) (confidence: \(String(format: "%.0f", conf * 100))%)")
+            return UserIntent(type: intent, confidence: conf)
         }
         return classifyWithKeywords(text)
+        
     }
 
     // MARK: - Core ML path (uses Xcode-generated typed API — no string feature name lookup)
@@ -166,6 +186,120 @@ class LightweightBertTokenizer {
         return BertTokens(inputIds: inputIds, attentionMask: mask)
     }
 }
+
+
+final class IntentClassifierLR {
+    struct Model: Decodable {
+        let classes: [String]
+        let vocab: [String: Int]
+        let idf: [Float]
+        let W: [[Float]]   // [C][F]
+        let b: [Float]     // [C]
+    }
+
+    private let model: Model
+
+    init(jsonFileName: String = "intent_tfidf_lr") throws {
+        guard let url = Bundle.main.url(forResource: jsonFileName, withExtension: "json") else {
+            throw NSError(domain: "IntentClassifierLR", code: 1, userInfo: [NSLocalizedDescriptionKey: "Model JSON not found"])
+        }
+        let data = try Data(contentsOf: url)
+        self.model = try JSONDecoder().decode(Model.self, from: data)
+    }
+
+    // Simple tokenizer: lowercase + split on non-alphanumerics.
+    // (Matches the Python token_pattern fairly closely.)
+    private func tokens(_ text: String) -> [String] {
+        let lower = text.lowercased()
+        return lower
+            .split { !$0.isLetter && !$0.isNumber && $0 != "_" }
+            .map(String.init)
+            .filter { !$0.isEmpty }
+    }
+
+    // Build 1-2 gram tokens
+    private func ngrams(_ toks: [String]) -> [String] {
+        if toks.isEmpty { return [] }
+        var out = [String]()
+        out.reserveCapacity(toks.count * 2)
+        // unigrams
+        out.append(contentsOf: toks)
+        // bigrams
+        if toks.count >= 2 {
+            for i in 0..<(toks.count - 1) {
+                out.append("\(toks[i]) \(toks[i+1])")
+            }
+        }
+        return out
+    }
+
+    /// Returns (intent, confidence, topK)
+    func predict(_ text: String, topK: Int = 3) -> (String, Float, [(String, Float)]) {
+        let toks = ngrams(tokens(text))
+
+        // term counts for known vocab
+        var counts: [Int: Int] = [:]
+        counts.reserveCapacity(toks.count)
+
+        for t in toks {
+            if let idx = model.vocab[t] {
+                counts[idx, default: 0] += 1
+            }
+        }
+
+        if counts.isEmpty {
+            return ("general", 0.0, [("general", 0.0)])
+        }
+
+        // TF-IDF vector in sparse form: x[j] = tf(j) * idf[j]
+        // Use tf = raw count (good enough for this small model)
+        // Optionally normalize L2 like sklearn does: we’ll do L2 normalization.
+        var x: [Int: Float] = [:]
+        x.reserveCapacity(counts.count)
+
+        var norm2: Float = 0
+        for (j, c) in counts {
+            let v = Float(c) * model.idf[j]
+            x[j] = v
+            norm2 += v * v
+        }
+        let norm = sqrt(norm2)
+        if norm > 0 {
+            for (j, v) in x {
+                x[j] = v / norm
+            }
+        }
+
+        // Compute logits = W*x + b
+        let C = model.classes.count
+        var logits = Array(repeating: Float(0), count: C)
+
+        for c in 0..<C {
+            var s = model.b[c]
+            let wRow = model.W[c]
+            for (j, v) in x {
+                s += wRow[j] * v
+            }
+            logits[c] = s
+        }
+
+        // Softmax
+        let maxLogit = logits.max() ?? 0
+        var exps = logits.map { expf($0 - maxLogit) }
+        let sumExp = exps.reduce(0, +)
+        let probs = exps.map { $0 / sumExp }
+
+        // TopK
+        let ranked = probs.enumerated()
+            .sorted { $0.element > $1.element }
+            .prefix(max(1, topK))
+            .map { (model.classes[$0.offset], $0.element) }
+
+        let best = ranked[0]
+        return (best.0, best.1, ranked)
+    }
+}
+
 
 // MARK: - Safe Collection Extension
 
