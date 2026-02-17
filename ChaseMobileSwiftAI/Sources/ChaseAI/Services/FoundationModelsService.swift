@@ -281,6 +281,7 @@ actor FoundationModelsService {
         } catch LanguageModelSession.GenerationError.exceededContextWindowSize(let contextWindow) {
             // Log + rebuild session with condensed transcript
             print("exceededContextWindowSize error ")
+            resetCache()
             let newSession = newContextualSession(with: session)
             chatSession = newSession     // persist the new session
             session = newSession         // use for retry immediately
