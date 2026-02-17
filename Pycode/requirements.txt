@@ -1,0 +1,20 @@
+# MLTraining/requirements.txt
+# ML training dependencies — run model conversion on macOS (Apple Silicon recommended)
+
+# Core ML conversion
+coremltools==8.0
+torch==2.4.0
+transformers==4.44.0
+datasets==3.0.0
+
+# Intent classifier
+scikit-learn==1.5.2
+numpy==1.26.4
+pandas==2.2.3
+
+# Embeddings
+sentence-transformers==3.1.0
+
+# PHI-3 / generative models
+accelerate==0.34.0
+sentencepiece==0.2.0
