@@ -16,6 +16,29 @@ ident classifier
  
  */
 
+
+/*
+ prompt
+ 
+ If user says hello/hi/thanks after a query:
+            - Respond briefly: "Hello! How can I help you?"
+            - Do NOT continue previous topic
+            - Do NOT mention transfers or actions
+            - Do NOT repeat previous information
+            
+            TOOL USAGE:
+            
+            stageTransfer - ONLY call when:
+            - User explicitly requests a transfer with amount
+            - User says "transfer $200 to savings" or similar
+            - NEVER call for "hello", "thanks", "ok", or questions
+ 
+ 
+ 
+ 
+ 
+ */
+
 /*
  Fix 3 — Proactive Session Summarisation (Main Fix)
  When the session is getting long, summarise it before it overflows, then start fresh with the summary:
