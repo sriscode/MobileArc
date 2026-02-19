@@ -1,0 +1,15 @@
+{"event": "llm_call", "timestamp": "2026-02-19T01:24:28.655008Z", "metadata": {"user_id": "dev_user_001", "session_id": "8FFA89A2-8059-4FB9-B1D6-A64A35A9A744", "iteration": "1", "stop_reason": "tool_use", "intent": "balance_query"}}
+{"event": "tool_call", "timestamp": "2026-02-19T01:24:28.758258Z", "metadata": {"user_id": "dev_user_001", "tool": "get_account_summary", "has_result": "yes"}}
+{"event": "llm_call", "timestamp": "2026-02-19T01:24:32.036014Z", "metadata": {"user_id": "dev_user_001", "session_id": "8FFA89A2-8059-4FB9-B1D6-A64A35A9A744", "iteration": "2", "stop_reason": "end_turn", "intent": "balance_query"}}
+{"event": "llm_call", "timestamp": "2026-02-19T01:24:53.513968Z", "metadata": {"user_id": "dev_user_001", "session_id": "8FFA89A2-8059-4FB9-B1D6-A64A35A9A744", "iteration": "1", "stop_reason": "tool_use", "intent": "balance_query"}}
+{"event": "tool_call", "timestamp": "2026-02-19T01:24:53.617003Z", "metadata": {"user_id": "dev_user_001", "tool": "get_account_summary", "has_result": "yes"}}
+{"event": "llm_call", "timestamp": "2026-02-19T01:24:56.013928Z", "metadata": {"user_id": "dev_user_001", "session_id": "8FFA89A2-8059-4FB9-B1D6-A64A35A9A744", "iteration": "2", "stop_reason": "end_turn", "intent": "balance_query"}}
+{"event": "llm_call", "timestamp": "2026-02-19T01:25:06.856469Z", "metadata": {"user_id": "dev_user_001", "session_id": "8FFA89A2-8059-4FB9-B1D6-A64A35A9A744", "iteration": "1", "stop_reason": "tool_use", "intent": "spending_analysis"}}
+{"event": "tool_call", "timestamp": "2026-02-19T01:25:07.058954Z", "metadata": {"user_id": "dev_user_001", "tool": "get_spending_analysis", "has_result": "yes"}}
+{"event": "llm_call", "timestamp": "2026-02-19T01:25:12.392210Z", "metadata": {"user_id": "dev_user_001", "session_id": "8FFA89A2-8059-4FB9-B1D6-A64A35A9A744", "iteration": "2", "stop_reason": "end_turn", "intent": "spending_analysis"}}
+{"event": "llm_call", "timestamp": "2026-02-19T01:31:43.727272Z", "metadata": {"user_id": "dev_user_001", "session_id": "88ADAF77-F3FA-422D-A3C7-2CDAA82E5BD7", "iteration": "1", "stop_reason": "tool_use", "intent": "spending_analysis"}}
+{"event": "tool_call", "timestamp": "2026-02-19T01:31:43.831010Z", "metadata": {"user_id": "dev_user_001", "tool": "get_account_summary", "has_result": "yes"}}
+{"event": "llm_call", "timestamp": "2026-02-19T01:31:48.021686Z", "metadata": {"user_id": "dev_user_001", "session_id": "88ADAF77-F3FA-422D-A3C7-2CDAA82E5BD7", "iteration": "2", "stop_reason": "end_turn", "intent": "spending_analysis"}}
+{"event": "llm_call", "timestamp": "2026-02-19T01:32:17.232310Z", "metadata": {"user_id": "dev_user_001", "session_id": "88ADAF77-F3FA-422D-A3C7-2CDAA82E5BD7", "iteration": "1", "stop_reason": "tool_use", "intent": "spending_analysis"}}
+{"event": "tool_call", "timestamp": "2026-02-19T01:32:17.335309Z", "metadata": {"user_id": "dev_user_001", "tool": "get_account_summary", "has_result": "yes"}}
+{"event": "llm_call", "timestamp": "2026-02-19T01:32:20.593684Z", "metadata": {"user_id": "dev_user_001", "session_id": "88ADAF77-F3FA-422D-A3C7-2CDAA82E5BD7", "iteration": "2", "stop_reason": "end_turn", "intent": "spending_analysis"}}

@@ -1,0 +1,62 @@
+anthropic key :   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
+
+
+
+Step 1 — Backend (Day 1, ~15 minutes)
+bash cd Backend && python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env   # add ANTHROPIC_API_KEY
+uvicorn api.main:app --reload
+Test: curl localhost:8000/health
+Step 2 — Train Core ML models (Day 2-3)
+bashcd MLTraining && pip install -r requirements.txt
+python intent_classifier/train_intent_classifier.py   # ~2 min → ChaseIntentClassifier.mlpackage
+python fraud_detector/train_fraud_model.py            # ~1 min → ChaseAnomalyDetector.mlpackage
+python embeddings/convert_minilm.py                   # ~5 min → MiniLMEmbedder.mlpackage
+All .mlpackage files drop directly into iOS/Sources/CoreML/Models/
+Step 3 — iOS app in Xcode 26 (Day 3-4)
+
+Open iOS/ as a Swift package in Xcode 26
+Set CLOUD_AGENT_URL = "http://localhost:8000" in CloudAgentService.swift
+Run on iPhone 15 Pro (for Foundation Models) or any iOS 18+ device (Core ML fallback)
+Watch the AIGreeterCard tell you which backend activated
+
+Step 4 — PHI-3 fallback (Optional, Week 2)
+bashpython phi3_conversion/convert_phi3.py   # 2-4hrs, needs 16GB RAM
+Skip this initially — the app works without it by routing older devices to cloud.
+
+What each layer does at runtime:
+QueryRoute"What's my balance?"Core ML intent (5ms) → Foundation Models → GetAccountBalanceTool"Move $500 to savings"Core ML intent → Foundation Models → StageTransferTool → approval sheet → Cloud executesAny new transactionCore ML fraud detector in parallel (<1ms)iOS 24 deviceSame query → Core ML PHI-3 fallback instead
+The FinancialAgentCoordinator handles all of this routing automatically — you never call Foundation Models or Core ML directly from your views.
+
+
+
+
+
+
+convert_phi3.py not needed as its microsft 3.8b token param local llm
+PHI-3 Mini is Microsoft's small but capable language model (~3.8B parameters). The Int4 means it's been compressed to 4-bit weights, shrinking it from ~7GB down to ~900MB so it can fit on an iPhone.
+
+
+TF-IDF is logistic regression
+if TF-IDF is used, use below code, bert_vocab.txt is not required for TF-IDF
+
+// IntentClassifier.swift — simplified dramatically
+func classifyWithCoreML(_ text: String, model: MLModel) throws -> UserIntent {
+    let input = try MLDictionaryFeatureProvider(dictionary: [
+        "text": MLFeatureValue(string: text)   // raw text — no tokenizer needed
+    ])
+    let output = try model.prediction(from: input)
+    let label  = output.featureValue(for: "intent")?.stringValue ?? "general"
+    let intent = IntentType(rawValue: label) ?? .general
+    return UserIntent(type: intent, confidence: 0.9)
+}
+
+You trained:
+A TF-IDF feature extractor
+A Logistic Regression classifier
+Learned:
+vocabulary
+IDF weights
+model coefficients
+class biases
